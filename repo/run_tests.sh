@@ -42,16 +42,16 @@ print_result() {
 }
 
 # ==========================================
-# GO UNIT TESTS (primary — exercises real production code)
+# UNIT TESTS (backend)
 # ==========================================
 run_go_tests() {
-    print_header "GO UNIT TESTS (backend)"
+    print_header "UNIT TESTS"
 
     local go_pass=0
     local go_fail=0
 
     if [ -f "backend/go.mod" ]; then
-        echo -e "${BLUE}Running go test ./... from backend/...${NC}"
+        echo -e "${BLUE}Running unit tests from backend/...${NC}"
         output=$(cd backend && go test ./... -count=1 2>&1)
         exit_code=$?
 
@@ -71,42 +71,67 @@ run_go_tests() {
 
         echo ""
         if [ $exit_code -eq 0 ]; then
-            echo -e "  ${GREEN}Go Tests: $go_pass passed, $go_fail failed${NC}"
+            echo -e "  ${GREEN}Unit Tests: $go_pass passed, $go_fail failed${NC}"
         else
-            echo -e "  ${RED}Go Tests: $go_pass passed, $go_fail failed${NC}"
+            echo -e "  ${RED}Unit Tests: $go_pass passed, $go_fail failed${NC}"
             echo "$output" | grep -E "^FAIL|FAIL\t|--- FAIL:" | head -10
         fi
     else
-        echo -e "${YELLOW}WARNING: backend/go.mod not found, skipping Go tests${NC}"
+        echo -e "${YELLOW}WARNING: backend/go.mod not found, skipping unit tests${NC}"
         TOTAL_SKIP=$((TOTAL_SKIP + 1))
     fi
 }
 
 # ==========================================
-# JS UNIT TESTS (placeholder stubs — real tests are in Go)
+# UNIT TESTS (frontend)
 # ==========================================
 run_unit_tests() {
-    print_header "JS UNIT TESTS (Vitest — placeholder stubs)"
+    print_header "UNIT TESTS"
 
     local unit_pass=0
     local unit_fail=0
 
     # Install frontend deps (including devDependencies) before running Vitest.
     if [ -f "frontend/package.json" ] && grep -q '"vitest"' "frontend/package.json" 2>/dev/null; then
-        echo -e "${BLUE}Installing frontend dependencies (including dev)...${NC}"
-        install_output=$(cd frontend && npm ci --include=dev 2>&1)
-        install_exit_code=$?
+        local use_docker_node=0
 
-        if [ $install_exit_code -ne 0 ]; then
-            echo -e "  ${RED}Failed to install frontend dependencies${NC}"
-            echo "$install_output" | tail -20
-            TOTAL_FAIL=$((TOTAL_FAIL + 1))
-            return
+        # Some environments use a Node patch version that lacks util.styleText.
+        if command -v node >/dev/null 2>&1; then
+            node -e "import('node:util').then(m=>process.exit(typeof m.styleText==='function'?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1 || use_docker_node=1
+        else
+            use_docker_node=1
         fi
 
-        echo -e "${BLUE}Running vitest from frontend/...${NC}"
-        output=$(cd frontend && npx vitest run --reporter=verbose --no-color 2>&1)
-        exit_code=$?
+        if [ "$use_docker_node" -eq 0 ]; then
+            echo -e "${BLUE}Installing frontend dependencies (including dev)...${NC}"
+            install_output=$(cd frontend && npm ci --include=dev 2>&1)
+            install_exit_code=$?
+
+            if [ $install_exit_code -ne 0 ]; then
+                echo -e "  ${RED}Failed to install frontend dependencies${NC}"
+                echo "$install_output" | tail -20
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
+                return
+            fi
+
+            echo -e "${BLUE}Running unit tests from frontend/...${NC}"
+            output=$(cd frontend && npx vitest run --reporter=verbose --no-color 2>&1)
+            exit_code=$?
+        else
+            if ! command -v docker >/dev/null 2>&1; then
+                echo -e "  ${RED}Node runtime does not support styleText and Docker is unavailable for fallback${NC}"
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
+                return
+            fi
+
+            echo -e "${YELLOW}Local Node lacks styleText; running frontend unit tests in node:22-alpine...${NC}"
+            output=$(docker run --rm \
+                -v "$SCRIPT_DIR/frontend:/app" \
+                -w /app \
+                node:22-alpine \
+                sh -lc "npm install --include=dev --no-package-lock >/dev/null 2>&1 && npx vitest run --reporter=verbose --no-color" 2>&1)
+            exit_code=$?
+        fi
 
         # Parse Vitest v4 summary line, e.g. "Tests  144 passed (144)"
         summary_line=$(echo "$output" | grep -E "^[[:space:]]*Tests[[:space:]]+" | tail -1 || true)
@@ -128,13 +153,13 @@ run_unit_tests() {
 
         echo ""
         if [ $exit_code -eq 0 ]; then
-            echo -e "  ${GREEN}JS Tests: $unit_pass passed, $unit_fail failed${NC}"
+            echo -e "  ${GREEN}Unit Tests: $unit_pass passed, $unit_fail failed${NC}"
         else
-            echo -e "  ${RED}JS Tests: $unit_pass passed, $unit_fail failed${NC}"
+            echo -e "  ${RED}Unit Tests: $unit_pass passed, $unit_fail failed${NC}"
             echo "$output" | grep -E "FAIL|AssertionError|Error" | head -10
         fi
     else
-        echo -e "${YELLOW}WARNING: vitest not found in frontend/package.json, skipping JS tests${NC}"
+        echo -e "${YELLOW}WARNING: vitest not found in frontend/package.json, skipping unit tests${NC}"
         TOTAL_SKIP=$((TOTAL_SKIP + 1))
     fi
 }
