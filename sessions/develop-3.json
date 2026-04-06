@@ -1,0 +1,43 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "prepare docker so i can see what you have work on"
+        }
+      ],
+      "_metadata": {
+        "timestamp": "2026-04-05T14:32:46.557Z"
+      }
+    }
+  ],
+  "meta": {
+    "session_meta": {
+      "session_id": "72b8c62f-b24c-4f55-96c0-a57abafdda93",
+      "version": "2.1.92",
+      "git_branch": "main",
+      "cwd": "/Users/macbookpro/Projects/eaglepoint/w1t21/repo"
+    },
+    "token_counts": [],
+    "skipped_events_count": 1,
+    "skipped_events": [
+      {
+        "type": "file-history-snapshot",
+        "timestamp": null,
+        "data": null
+      }
+    ],
+    "subagents": [],
+    "merge_warnings": [],
+    "merge_stats": {
+      "main_messages": 1,
+      "subagent_messages": 0,
+      "merged_messages": 1,
+      "subagent_count": 0,
+      "has_subagents": false,
+      "source_root": "/Users/macbookpro/.claude/projects/-Users-macbookpro-Projects-eaglepoint-w1t21-repo"
+    }
+  }
+}

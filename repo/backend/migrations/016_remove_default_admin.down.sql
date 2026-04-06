@@ -1,0 +1,3 @@
+-- Re-insert the default admin if rolling back. This is intentionally a no-op
+-- placeholder — the secure bootstrap process should be used instead.
+-- If you must restore the default admin for local development, run seed.sql.
