@@ -17,12 +17,41 @@ cd "$SCRIPT_DIR"
 TOTAL_PASS=0
 TOTAL_FAIL=0
 TOTAL_SKIP=0
+COMPOSE_STARTED=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
+
+cleanup() {
+    if [ "$COMPOSE_STARTED" -eq 1 ]; then
+        echo ""
+        echo "Cleaning up docker compose resources..."
+        docker compose down --remove-orphans --rmi local -v >/dev/null 2>&1 || true
+        echo "Cleanup complete."
+    fi
+}
+
+teardown_and_exit() {
+    local exit_code="$1"
+    cleanup
+    exit "$exit_code"
+}
+
+run_api_script_compose() {
+    local script_path="$1"
+    docker compose run --rm --no-deps -T \
+        -v "$SCRIPT_DIR:/workspace" \
+        -w /workspace \
+        backend sh -lc "
+            apk add --no-cache bash curl python3 postgresql-client >/dev/null 2>&1 &&
+            export API_BASE_URL=http://backend:8080 &&
+            export DATABASE_URL='postgresql://ledgermint:${DB_PASSWORD:-changeme}@postgres:5432/ledgermint?sslmode=disable' &&
+            bash \"$script_path\"
+        "
+}
 
 print_header() {
     echo ""
@@ -173,25 +202,50 @@ run_api_tests() {
     local api_pass=0
     local api_fail=0
 
-    # Check if services are running
-    export API_BASE_URL="${API_BASE_URL:-http://localhost:8080}"
+    echo "Resetting previous docker compose state..."
+    docker compose down --remove-orphans --rmi local -v >/dev/null 2>&1 || true
 
-    echo "Checking API availability at $API_BASE_URL..."
-    if ! curl -s --max-time 5 "$API_BASE_URL/api/auth/login" > /dev/null 2>&1; then
-        echo -e "${YELLOW}WARNING: API not reachable at $API_BASE_URL${NC}"
-        echo "Make sure services are running: docker compose up"
-        echo "And seed data is loaded: make seed"
-        TOTAL_SKIP=$((TOTAL_SKIP + 1))
+    echo "Starting docker compose services..."
+    if ! DISABLE_RATE_LIMIT=true docker compose up -d --build; then
+        echo -e "${RED}Failed to build/start docker compose services${NC}"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
         return
     fi
-    echo -e "${GREEN}API is reachable${NC}"
+    COMPOSE_STARTED=1
 
-    # Enable test mode: disable rate limiting for API tests
-    export DISABLE_RATE_LIMIT=true
+    echo "Waiting for postgres to be ready..."
+    local pg_ready=0
+    for i in $(seq 1 30); do
+        if docker compose run --rm --no-deps -T postgres pg_isready -h postgres -U ledgermint >/dev/null 2>&1; then
+            pg_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$pg_ready" -ne 1 ]; then
+        echo -e "${RED}Postgres did not become ready in time${NC}"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        return
+    fi
+
+    echo "Waiting for backend API to be reachable..."
+    local api_ready=0
+    for i in $(seq 1 30); do
+        if docker compose run --rm --no-deps -T backend sh -lc "wget -q -T 2 -O /dev/null http://backend:8080/api/auth/login" >/dev/null 2>&1; then
+            api_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$api_ready" -ne 1 ]; then
+        echo -e "${RED}Backend API did not become reachable in time${NC}"
+        TOTAL_FAIL=$((TOTAL_FAIL + 1))
+        return
+    fi
 
     # Reset mutable application data so reruns start from a clean seeded state.
     # Keep roles, notification templates, and schema_migrations (reference/infra data).
-    docker compose exec -T postgres psql -U ledgermint -d ledgermint -q <<'SQLRESET' >/dev/null 2>&1 || true
+    docker compose run --rm --no-deps -T postgres psql -h postgres -U ledgermint -d ledgermint -q <<'SQLRESET' >/dev/null 2>&1 || true
 DO $$
 DECLARE
     stmt text;
@@ -209,23 +263,14 @@ END $$;
 SQLRESET
 
     # Re-seed the database after truncation
-    docker compose exec -T postgres psql -U ledgermint -d ledgermint -f /dev/stdin < scripts/seed.sql >/dev/null 2>&1 || true
-
-    # Restart backend with DISABLE_RATE_LIMIT environment variable
-    DISABLE_RATE_LIMIT=true docker compose up -d --no-deps backend > /dev/null 2>&1
-    for _ in $(seq 1 30); do
-        if curl -s --max-time 2 "$API_BASE_URL/api/auth/login" > /dev/null 2>&1; then
-            break
-        fi
-        sleep 1
-    done
+    docker compose run --rm --no-deps -T postgres psql -h postgres -U ledgermint -d ledgermint -f /dev/stdin < scripts/seed.sql >/dev/null 2>&1 || true
 
     echo ""
 
     # Run setup check first — if it fails, abort remaining API tests
     if [ -f "API_tests/test_00_setup.sh" ]; then
         echo -e "${BLUE}Running test_00_setup (pre-flight checks)...${NC}"
-        setup_output=$(bash "API_tests/test_00_setup.sh" 2>&1)
+        setup_output=$(run_api_script_compose "API_tests/test_00_setup.sh" 2>&1)
         setup_exit=$?
         setup_passed=$(echo "$setup_output" | grep -c "  PASS:")
         setup_failed=$(echo "$setup_output" | grep -c "  FAIL:")
@@ -259,7 +304,7 @@ SQLRESET
         test_name=$(basename "$test_file" .sh)
         echo -e "${BLUE}Running $test_name...${NC}"
 
-        output=$(bash "$test_file" 2>&1)
+        output=$(run_api_script_compose "$test_file" 2>&1)
         exit_code=$?
 
         # Extract pass/fail from output
@@ -278,7 +323,7 @@ SQLRESET
         echo ""
 
         # Clear rate limits between test files to prevent 429 cascade failures
-        docker compose exec -T postgres psql -U ledgermint -d ledgermint -c "DELETE FROM login_attempts;" 2>/dev/null || true
+        docker compose run --rm --no-deps -T postgres psql -h postgres -U ledgermint -d ledgermint -c "DELETE FROM login_attempts;" >/dev/null 2>&1 || true
         sleep 2
     done
 
@@ -292,6 +337,8 @@ SQLRESET
 # MAIN
 # ==========================================
 MODE="${1:-all}"
+
+trap 'teardown_and_exit 130' INT TERM
 
 case "$MODE" in
     unit)
@@ -327,15 +374,15 @@ if [ "$TOTAL_FAIL" -eq 0 ] && [ "$TOTAL_PASS" -gt 0 ]; then
     echo -e "  ${GREEN}========================================${NC}"
     echo -e "  ${GREEN}  ALL TESTS PASSED ($TOTAL_PASS total)${NC}"
     echo -e "  ${GREEN}========================================${NC}"
-    exit 0
+    teardown_and_exit 0
 elif [ "$TOTAL_FAIL" -gt 0 ]; then
     echo -e "  ${RED}========================================${NC}"
     echo -e "  ${RED}  SOME TESTS FAILED ($TOTAL_FAIL failures)${NC}"
     echo -e "  ${RED}========================================${NC}"
-    exit 1
+    teardown_and_exit 1
 else
     echo -e "  ${YELLOW}========================================${NC}"
     echo -e "  ${YELLOW}  NO TESTS RAN${NC}"
     echo -e "  ${YELLOW}========================================${NC}"
-    exit 1
+    teardown_and_exit 1
 fi
