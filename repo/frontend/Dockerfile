@@ -1,8 +1,7 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-COPY node_modules/ ./node_modules/
-RUN [ -d node_modules ] && echo "Using pre-installed node_modules" || npm install
+RUN npm ci --prefer-offline --no-audit --no-fund
 COPY . .
 RUN npm run build
 
