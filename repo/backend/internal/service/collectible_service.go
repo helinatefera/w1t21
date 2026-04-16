@@ -31,20 +31,13 @@ func (s *CollectibleService) Create(ctx context.Context, req dto.CreateCollectib
 		currency = "USD"
 	}
 
+	if err := validateCollectibleIdentity(req); err != nil {
+		return nil, err
+	}
+
 	tokenID := req.TokenID
 	chainID := req.ChainID
-	hasToken := tokenID != ""
-	hasChain := chainID != 0
-	if req.ContractAddress != "" {
-		if !hasToken || !hasChain {
-			return nil, fmt.Errorf("%w: contract_address requires chain_id and token_id", dto.ErrValidation)
-		}
-	} else if hasToken || hasChain {
-		// When either identity field is provided, require both.
-		if !hasToken || !hasChain {
-			return nil, fmt.Errorf("%w: chain_id and token_id must both be provided when either is set", dto.ErrValidation)
-		}
-	} else {
+	if req.ContractAddress == "" && tokenID == "" && chainID == 0 {
 		// Neither provided — generate platform defaults for off-chain items.
 		tokenID = uuid.New().String()
 		chainID = 1
@@ -310,6 +303,23 @@ func resolveABVariant(analyticsStore *store.AnalyticsStore, userID *uuid.UUID) s
 		parts = append(parts, t.Name+":"+variantName)
 	}
 	return strings.Join(parts, ",")
+}
+
+// validateCollectibleIdentity checks the identity field constraints.
+// Returns nil when the combination is valid; an error otherwise.
+func validateCollectibleIdentity(req dto.CreateCollectibleRequest) error {
+	hasToken := req.TokenID != ""
+	hasChain := req.ChainID != 0
+	if req.ContractAddress != "" {
+		if !hasToken || !hasChain {
+			return fmt.Errorf("%w: contract_address requires chain_id and token_id", dto.ErrValidation)
+		}
+	} else if hasToken || hasChain {
+		if !hasToken || !hasChain {
+			return fmt.Errorf("%w: chain_id and token_id must both be provided when either is set", dto.ErrValidation)
+		}
+	}
+	return nil
 }
 
 func hasAdminOrCompliance(roles []string) bool {

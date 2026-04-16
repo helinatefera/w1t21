@@ -14,10 +14,10 @@ A full-stack platform for listing, buying, and managing digital collectibles (NF
 ## Quick Start
 
 ```bash
-docker compose up
+docker-compose up
 ```
 
-This single command builds and starts all three services (PostgreSQL, backend API, frontend).
+This single command builds and starts all three services (PostgreSQL, backend API, frontend). The backend automatically runs database migrations and seeds initial data on first startup.
 
 ## Service URLs and Ports
 
@@ -29,44 +29,26 @@ This single command builds and starts all three services (PostgreSQL, backend AP
 
 The frontend Nginx proxy forwards `/api/*` requests to the backend, so all API calls work through http://localhost/api/ as well.
 
-## First-Time Setup
+## Demo Credentials
 
-No default admin credentials are included in the database migrations. On first deployment, you must bootstrap an administrator account:
+The database is automatically seeded on first startup. Use these credentials to log in:
 
-```bash
-# 1. Start services
-docker compose up
+| Username | Password | Role | Description |
+|----------|----------|------|-------------|
+| `admin` | `testpass123` | administrator | Full admin access: user management, moderation, analytics, A/B tests, IP rules |
+| `seller1` | `testpass123` | seller | Can create/manage collectible listings, confirm/process/complete orders |
+| `buyer1` | `testpass123` | buyer | Can browse catalog, place orders, send messages, post reviews |
+| `analyst1` | `testpass123` | compliance_analyst | Read-only access to analytics, A/B test results, anomaly alerts |
 
-# 2. Create the initial administrator (interactive)
-make create-admin
-
-# Or use the API directly:
-curl -X POST http://localhost:8080/api/setup/admin \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"<STRONG-PASSWORD>","display_name":"System Administrator"}'
-```
-
-The bootstrap endpoint (`POST /api/setup/admin`) is only available when no administrator account exists. It is intentionally CSRF-exempt because it is called before any user session exists and is a one-time bootstrap operation — once an admin account is created, the endpoint returns `409 Conflict` and cannot be used again. All other API endpoints return `503 Service Unavailable` until setup is complete. You can check setup status at any time via `GET /api/setup/status`.
-
-> **Security:** Never use predictable passwords (e.g. `admin123`, `password`) in production. Rotate credentials immediately after deployment. Default credentials must never be committed to version control.
-
-## Development Seed Data
-
-For local development, run `make seed` after startup to populate sample users and collectibles. **These credentials are for development only and must never be used in production.**
-
-```bash
-docker compose exec postgres psql -U ledgermint -d ledgermint -f /dev/stdin < scripts/seed.sql
-```
-
-The seed script creates an admin and sample users with weak passwords suitable only for local testing.
+> **Security:** These are development-only credentials with intentionally weak passwords. Never use them in production. For production deployment, use `POST /api/setup/admin` to bootstrap a secure administrator account.
 
 ## Verification
 
-1. Open http://localhost in a browser
-2. Complete the initial setup (create an admin account) or run `make seed` for development
-3. Log in with the admin credentials you created
+1. Run `docker-compose up` and wait for all services to start
+2. Open http://localhost in a browser
+3. Log in as `admin` / `testpass123`
 4. You should see the Dashboard with stats cards (Open Orders, Unread Notifications, Roles)
-5. Navigate to **Catalog** - after seeding, three sample collectibles appear
+5. Navigate to **Catalog** - three sample collectibles appear
 6. Navigate to **Users** (admin sidebar) to manage users and roles
 7. Navigate to **Analytics** to see funnel, retention, and content performance charts
 
@@ -79,6 +61,7 @@ The seed script creates an admin and sample users with weak passwords suitable o
 ### Authentication
 - `POST /api/auth/login` - Login (public, rate limited)
 - `POST /api/auth/refresh` - Refresh tokens (public)
+- `GET /api/auth/me` - Get current user profile (authenticated)
 - `POST /api/auth/logout` - Logout (authenticated)
 
 ### Dashboard
@@ -99,6 +82,7 @@ The seed script creates an admin and sample users with weak passwords suitable o
 - `GET /api/collectibles/:id` - Get collectible with transaction history
 - `POST /api/collectibles` - Create listing (seller, rate limited)
 - `PATCH /api/collectibles/:id` - Update listing (seller)
+- `POST /api/collectibles/:id/reviews` - Post a review (authenticated)
 - `PATCH /api/collectibles/:id/hide` - Hide listing (administrator)
 - `PATCH /api/collectibles/:id/publish` - Publish listing (administrator)
 
@@ -110,11 +94,14 @@ The seed script creates an admin and sample users with weak passwords suitable o
 - `POST /api/orders/:id/process` - Start processing (seller)
 - `POST /api/orders/:id/complete` - Complete order (seller)
 - `POST /api/orders/:id/cancel` - Cancel order (buyer or seller)
+- `POST /api/orders/:id/refund` - Approve refund (seller)
+- `POST /api/orders/:id/arbitration` - Open arbitration (buyer or seller)
 - `PATCH /api/orders/:id/fulfillment` - Update fulfillment tracking (seller)
 
 ### Messages
 - `GET /api/orders/:orderId/messages` - List messages (paginated)
 - `POST /api/orders/:orderId/messages` - Send message with optional attachment (multipart, 10MB limit)
+- `GET /api/messages/:messageId/attachment` - Download attachment
 
 ### Notifications
 - `GET /api/notifications` - List notifications (paginated, `?unread=true`)
@@ -129,12 +116,15 @@ The seed script creates an admin and sample users with weak passwords suitable o
 - `GET /api/analytics/retention` - Retention cohorts (`?days=7|30`)
 - `GET /api/analytics/content-performance` - Content performance (`?limit=20`)
 
-### A/B Tests (administrator)
+### A/B Tests (administrator, compliance_analyst)
 - `POST /api/ab-tests` - Create test
 - `GET /api/ab-tests` - List tests
 - `GET /api/ab-tests/:id` - Get test with results
+- `PATCH /api/ab-tests/:id` - Update test
+- `POST /api/ab-tests/:id/complete` - Complete test
 - `POST /api/ab-tests/:id/rollback` - Rollback test
 - `GET /api/ab-tests/assignments` - Get user's variant assignments (all authenticated)
+- `GET /api/ab-tests/registry` - Get experiment registry (all authenticated)
 
 ### Admin (administrator)
 - `GET /api/admin/ip-rules` - List IP rules
@@ -160,7 +150,6 @@ Valid transitions:
 
 ## Security Features
 
-- **No default credentials** — the first admin must be created via a secure bootstrap endpoint; no passwords are embedded in migrations or committed to version control
 - JWT authentication via HttpOnly cookies (15-min access, 7-day refresh with rotation)
 - CSRF protection (double-submit cookie pattern)
 - AES-256-GCM encryption for PII (emails)
@@ -171,8 +160,6 @@ Valid transitions:
 - PII detection in messages (SSN, phone numbers)
 - Refresh token family revocation (detects token reuse attacks)
 - Append-only audit log for auth events, admin actions, order transitions, and moderation
-- Encrypted keyfile secrets required in non-development environments (staging/production)
-- Setup guard middleware blocks all API access until initial admin bootstrap is complete
 
 ## Background Workers
 
@@ -191,23 +178,23 @@ Valid transitions:
 ./run_tests.sh
 ```
 
-This runs both unit tests and API tests. API tests require services to be running (`docker compose up`).
+This runs unit tests (Go backend, Vitest frontend), and API integration tests against a Dockerized environment. No manual setup is required.
 
-- `unit_tests/` - Core logic tests (state transitions, validation, PII detection)
+- `unit_tests/` - Frontend logic tests (state transitions, validation, PII detection, store behavior)
+- `frontend/src/**/*.test.{ts,tsx}` - Frontend component, store, and page tests
+- `backend/internal/**/*_test.go` - Backend Go unit tests
 - `API_tests/` - Functional API tests (auth, CRUD, permissions, error handling)
+- `e2e/` - Browser-level end-to-end tests (Playwright) for critical user journeys
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| APP_ENV | (none) | Must be explicitly set to `development` for plaintext env secrets; all other values (including unset) require `SECRETS_KEYFILE` |
 | DB_PASSWORD | changeme | PostgreSQL password |
 | JWT_SIGNING_KEY | dev_jwt_secret_change_in_production | JWT signing key (development only) |
 | AES_MASTER_KEY | (dev key) | 256-bit hex key for AES encryption (development only) |
 | LISTEN_ADDR | :8080 | Backend listen address |
 | DATABASE_URL | (auto-composed) | PostgreSQL connection string |
-| SECRETS_KEYFILE | | Path to AES-256-GCM encrypted keyfile (required when APP_ENV != development) |
-| SECRETS_PASSPHRASE | | Passphrase to decrypt the keyfile |
 
 ## Project Structure
 
@@ -215,9 +202,8 @@ This runs both unit tests and API tests. API tests require services to be runnin
 .
 ├── docker-compose.yml       # Service orchestration
 ├── README.md                # This file
-├── TEST_PROMPT.md           # Test verification document
 ├── run_tests.sh             # Test runner script
-├── unit_tests/              # Unit tests
+├── unit_tests/              # Frontend unit tests
 ├── API_tests/               # API integration tests
 ├── backend/
 │   ├── Dockerfile
@@ -246,6 +232,6 @@ This runs both unit tests and API tests. API tests require services to be runnin
 │       ├── types/           # TypeScript types
 │       └── utils/           # Formatters, PII detection
 └── scripts/
-    ├── seed.sql             # Sample data
+    ├── seed.sql             # Development sample data
     └── generate-keys.sh     # Key generation utility
 ```

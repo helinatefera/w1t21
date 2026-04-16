@@ -8,7 +8,13 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['../unit_tests/**/*.test.js'],
+    include: [
+      '../unit_tests/**/*.test.js',
+      'src/**/*.test.{ts,tsx}',
+    ],
     globals: true,
+    environmentMatchGlobs: [
+      ['src/**/*.test.tsx', 'happy-dom'],
+    ],
   },
 });

@@ -86,7 +86,7 @@ services:
 
 
  tester:
-   image: node:22-alpine
+   image: ledgermint-tester:latest
    working_dir: /workspace
    volumes:
      - ./:/workspace
@@ -151,7 +151,7 @@ setup_docker() {
  local tries=0
  local max_tries=40
  while [ "$tries" -lt "$max_tries" ]; do
-   if compose run --rm --no-deps -T tester "apk add --no-cache curl >/dev/null && curl -s -o /dev/null -w '%{http_code}' http://backend:8080/api/setup/status | grep -qE '200|503'" >/dev/null 2>&1; then
+   if compose run --rm --no-deps -T tester "curl -s -o /dev/null -w '%{http_code}' http://backend:8080/api/setup/status | grep -qE '200|503'" >/dev/null 2>&1; then
      break
    fi
    tries=$((tries + 1))
@@ -190,7 +190,7 @@ reset_api_state() {
  local tries=0
  local max_tries=40
  while [ "$tries" -lt "$max_tries" ]; do
-   if compose run --rm --no-deps -T tester "apk add --no-cache curl >/dev/null && curl -s -o /dev/null -w '%{http_code}' http://backend:8080/api/setup/status | grep -qE '200|503'" >/dev/null 2>&1; then
+   if compose run --rm --no-deps -T tester "curl -s -o /dev/null -w '%{http_code}' http://backend:8080/api/setup/status | grep -qE '200|503'" >/dev/null 2>&1; then
      break
    fi
    tries=$((tries + 1))
@@ -216,7 +216,7 @@ reset_api_state() {
 
 run_api_script_with_retry() {
  local script_name="$1"
- local cmd="apk add --no-cache bash curl python3 coreutils >/dev/null && bash /workspace/API_tests/$script_name"
+ local cmd="bash /workspace/API_tests/$script_name"
 
 
  if compose run --rm --no-deps -T tester "$cmd"; then
@@ -300,14 +300,14 @@ run_unit_tests() {
 
 
  echo "Preparing unit test dependencies inside Docker tester container..."
- if ! compose run --rm --no-deps -T tester "apk add --no-cache bash python3 >/dev/null && cd frontend && npm install --silent"; then
+ if ! compose run --rm --no-deps -T tester "cd frontend && { [ -d node_modules ] && echo 'Using existing node_modules' || npm install --silent; }"; then
    echo "ERROR: failed to prepare unit test dependencies in container."
    return 1
  fi
 
 
  for test_file in "${UNIT_FILES[@]}"; do
-   run_test "unit" "$(basename "$test_file")" compose run --rm --no-deps -T tester "apk add --no-cache bash python3 >/dev/null && cd frontend && npm run -s test -- ../unit_tests/$(basename "$test_file")"
+   run_test "unit" "$(basename "$test_file")" compose run --rm --no-deps -T tester "cd frontend && npm run -s test -- ../unit_tests/$(basename "$test_file")"
  done
 }
 
