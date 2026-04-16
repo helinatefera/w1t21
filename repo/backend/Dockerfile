@@ -1,7 +1,7 @@
-FROM golang:1.25-alpine AS build
+FROM golang:1.22-alpine AS build
 WORKDIR /app
 COPY . .
-RUN CGO_ENABLED=0 go build -mod=vendor -o server ./cmd/server
+RUN CGO_ENABLED=0 go build -mod=readonly -o server ./cmd/server
 
 FROM alpine:3.19
 COPY --from=build /app/server /usr/local/bin/server
